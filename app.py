@@ -1165,6 +1165,78 @@ def weekly_goal_check():
 threading.Thread(target=weekly_goal_check, daemon=True).start()
 
 
+# -------------------------
+# Auto-initialize database on startup
+# -------------------------
+def initialize_database():
+    """Initialize database tables if they don't exist."""
+    import sqlite3
+    
+    conn = sqlite3.connect('nexifit_users.db')
+    cursor = conn.cursor()
+    
+    # Create authorized users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS authorized_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT UNIQUE NOT NULL,
+            name TEXT,
+            authorized INTEGER DEFAULT 1,
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expiry_date TIMESTAMP,
+            notes TEXT
+        )
+    ''')
+    
+    # Create admin users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT UNIQUE NOT NULL,
+            name TEXT,
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create audit log table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auth_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT NOT NULL,
+            action TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            success INTEGER DEFAULT 0
+        )
+    ''')
+    
+    conn.commit()
+    
+    # Add default admin (⚠️ CHANGE THIS TO YOUR WHATSAPP NUMBER!)
+    default_admin = "whatsapp:+918667643749"  # ⚠️ CHANGE THIS!
+    
+    try:
+        cursor.execute('''
+            INSERT INTO admin_users (phone_number, name) 
+            VALUES (?, ?)
+        ''', (default_admin, "System Admin"))
+        
+        cursor.execute('''
+            INSERT INTO authorized_users (phone_number, name, authorized) 
+            VALUES (?, ?, 1)
+        ''', (default_admin, "System Admin"))
+        
+        conn.commit()
+        print(f"✅ Default admin initialized: {default_admin}")
+    except sqlite3.IntegrityError:
+        print("ℹ️ Admin already exists")
+    
+    conn.close()
+    print("✅ Database initialized successfully!")
+
+# Initialize database on startup
+initialize_database()
+
+
 @app.route("/health")
 def health():
     return "OK", 200
