@@ -993,62 +993,90 @@ def process_and_reply(sender, is_initial_plan=False, incoming_msg=""):
 # -------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
+    """
+    Main WhatsApp webhook handler.
+    Order of checks:
+    1. Check if ADMIN command (execute before auth)
+    2. Check if user is authorized
+    3. Handle onboarding or conversation
+    """
     incoming_msg = request.form.get("Body", "").strip()
     sender = request.form.get("From")
-    print(f"📩 Incoming from {sender}: {incoming_msg}")
+    print(f"\n{'='*60}")
+    print(f"📩 INCOMING MESSAGE")
+    print(f"   From: {sender}")
+    print(f"   Message: {incoming_msg}")
+    print(f"{'='*60}")
 
-    # =============================
-    # 🔐 CHECK ADMIN FIRST (before user auth)
-    # =============================
+    # =====================================================================
+    # STEP 1: CHECK IF THIS IS AN ADMIN COMMAND (BEFORE ANY AUTH CHECKS)
+    # =====================================================================
     
-    if incoming_msg.upper().startswith("ADMIN"):
-        # Admin commands don't need user authorization
-        # They just need to be an admin
+    msg_upper = incoming_msg.upper().strip()
+    
+    if msg_upper.startswith("ADMIN"):
+        print(f"🔐 Admin command detected: {msg_upper[:50]}")
+        
+        # Check if sender is admin
         if is_admin(sender):
+            print(f"✅ {sender} is ADMIN - executing command")
             admin_response = handle_admin_command(sender, incoming_msg)
+            
             if admin_response:
                 resp = MessagingResponse()
                 resp.message(admin_response)
-                log_auth_attempt(sender, "admin_command", success=True)
-                print(f"✅ Admin command executed by {sender}")
+                log_auth_attempt(sender, "admin_command_success", success=True)
+                print(f"✅ Admin command executed successfully\n")
                 return str(resp)
+            else:
+                print(f"⚠️ Admin command returned no response\n")
+                return str(MessagingResponse())
         else:
-            # Not an admin, reject
+            print(f"❌ {sender} is NOT admin - rejecting")
             resp = MessagingResponse()
             resp.message(
                 f"⛔ *Access Denied*\n\n"
                 f"You don't have admin privileges.\n\n"
-                f"Please contact the admin to get access:\n"
-                f"📧 {ADMIN_CONTACT}"
+                f"Current admin: {ADMIN_CONTACT}"
             )
-            log_auth_attempt(sender, "unauthorized_admin_attempt", success=False)
-            print(f"❌ Unauthorized admin attempt: {sender}")
+            log_auth_attempt(sender, "admin_command_rejected", success=False)
+            print(f"❌ Non-admin rejected\n")
             return str(resp)
     
-    # =============================
-    # 🔐 CHECK USER AUTHORIZATION (for regular users)
-    # =============================
+    # =====================================================================
+    # STEP 2: CHECK IF USER IS AUTHORIZED (FOR REGULAR MESSAGES)
+    # =====================================================================
     
-    if not is_user_authorized(sender):
+    print(f"🔐 Checking user authorization...")
+    is_authorized = is_user_authorized(sender)
+    print(f"   Authorization result: {is_authorized}")
+    
+    if not is_authorized:
+        print(f"❌ {sender} is NOT authorized")
         log_auth_attempt(sender, "unauthorized_access", success=False)
         resp = MessagingResponse()
         resp.message(
             f"⛔ *Access Denied*\n\n"
             f"Your number is not authorized to use NexiFit.\n\n"
-            f"Please contact the admin to get access:\n"
-            f"📧 {ADMIN_CONTACT}"
+            f"Contact admin:\n"
+            f"📧 {ADMIN_CONTACT}\n\n"
+            f"Ask admin to send:\n"
+            f"`ADMIN ADD {sender} YourName 30`"
         )
-        print(f"❌ Unauthorized access attempt: {sender}")
+        print(f"❌ Unauthorized user rejected\n")
         return str(resp)
     
-    # Log successful authentication
+    # ✅ User is authorized - log it
+    print(f"✅ {sender} is AUTHORIZED - proceeding")
     log_auth_attempt(sender, "authorized_access", success=True)
     
-    # =============================
-    # ONBOARDING & CONVERSATION
-    # =============================
-
+    # =====================================================================
+    # STEP 3: HANDLE ONBOARDING & CONVERSATION
+    # =====================================================================
+    
+    # Initialize session if new user
     if sender not in user_sessions:
+        print(f"🆕 New session for {sender} - starting onboarding")
         user_sessions[sender] = {
             "messages": [],
             "onboarding_step": "basic",
@@ -1064,73 +1092,96 @@ def whatsapp_webhook():
             "user_restrictions": None
         }
 
-        # Greeting message
-        combined_intro = (
+        greeting = (
             "💪 Hey there! I'm *NexiFit*, your personal fitness companion.\n\n"
-            "I'll help you design smart workouts, balanced meals, and keep you on track — all right here on WhatsApp!\n\n"
+            "I'll help you design smart workouts, balanced meals, and keep you on track — "
+            "all right here on WhatsApp!\n\n"
             "Before we begin, could you please tell me your details in this format?\n\n"
             "👉 *Name , Age , Gender*\n\n"
             "Example: Kishore , 25 , Male"
         )
 
         resp = MessagingResponse()
-        resp.message(combined_intro)
-
-        # threading.Timer(2.0, lambda: client.messages.create(
-        #     from_=TWILIO_WHATSAPP_NUMBER,
-        #     to=sender,
-        #     body=combined_intro
-        # )).start()
-
-        print(f"✅ New authorized user greeted: {sender}")
+        resp.message(greeting)
+        print(f"✅ Greeting sent to {sender}\n")
         return str(resp)
 
     session = user_sessions[sender]
-
-    # Step 1: Basic Info
+    
+    # ─────────────────────────────────────────────────────────────────
+    # STEP 3A: ONBOARDING STEP 1 - BASIC INFO
+    # ─────────────────────────────────────────────────────────────────
+    
     if session["onboarding_step"] == "basic":
+        print(f"📝 Processing BASIC onboarding for {sender}")
         try:
             parts = [p.strip() for p in incoming_msg.split(",")]
             session["name"] = parts[0] if len(parts) > 0 else None
             session["age"] = parts[1] if len(parts) > 1 else None
             session["gender"] = parts[2] if len(parts) > 2 else None
 
-            resp = MessagingResponse()
-            resp.message(
-                f"✅ Got it!\n- Name: {session['name']}\n- Age: {session['age']}\n- Gender: {session['gender']}\n\n"
-                "Do you have any *time & injury restrictions* today?\n\n"
-                "Example: 'Yes, only 30 minutes' , 'Mild knee pain' , 'No restrictions'"
+            response_text = (
+                f"✅ Got it!\n"
+                f"- Name: {session['name']}\n"
+                f"- Age: {session['age']}\n"
+                f"- Gender: {session['gender']}\n\n"
+                f"Do you have any *time & injury restrictions* today?\n\n"
+                f"Example: 'Yes, only 30 minutes' , 'Mild knee pain' , 'No restrictions'"
             )
+            
             session["onboarding_step"] = "restrictions"
-            return str(resp)
-
-        except Exception:
+            
             resp = MessagingResponse()
-            resp.message("⚠️ Please reply in format: Name , Age , Gender")
+            resp.message(response_text)
+            print(f"✅ Basic info saved, moving to restrictions\n")
             return str(resp)
 
-    # Step 1.5: Restrictions
+        except Exception as e:
+            print(f"❌ Error in basic onboarding: {e}")
+            resp = MessagingResponse()
+            resp.message("⚠️ Please reply in format: Name , Age , Gender\n\nExample: John , 25 , Male")
+            return str(resp)
+
+    # ─────────────────────────────────────────────────────────────────
+    # STEP 3B: ONBOARDING STEP 1.5 - RESTRICTIONS
+    # ─────────────────────────────────────────────────────────────────
+    
     if session["onboarding_step"] == "restrictions":
+        print(f"📝 Processing RESTRICTIONS for {sender}")
         session["user_restrictions"] = incoming_msg.strip()
         session["onboarding_step"] = "personalize"
 
-        resp = MessagingResponse()
-        resp.message(
-            f"✅ Thanks! I'll consider your restriction: '{session['user_restrictions']}'.\n\n"
-            "Do you want to make it more personalised?\n\n"
-            "👉 If yes, reply: Weight , Height , Goal , Injuries (if any)\n"
-            "👉 If no, just type 'No'"
+        response_text = (
+            f"✅ Thanks! I'll remember: '{session['user_restrictions']}'\n\n"
+            f"Do you want to make it more personalized?\n\n"
+            f"👉 If YES, reply: Weight , Height , Goal , Injuries\n"
+            f"👉 If NO, just type: No\n\n"
+            f"Example: 70kg , 5'10\" , Muscle Gain , Mild knee pain"
         )
+        
+        resp = MessagingResponse()
+        resp.message(response_text)
+        print(f"✅ Restrictions saved, asking for personalization\n")
         return str(resp)
 
-    # Step 2: Personalization
+    # ─────────────────────────────────────────────────────────────────
+    # STEP 3C: ONBOARDING STEP 2 - PERSONALIZATION
+    # ─────────────────────────────────────────────────────────────────
+    
     if session["onboarding_step"] == "personalize":
+        print(f"📝 Processing PERSONALIZATION for {sender}")
+        
         if incoming_msg.lower() == "no":
+            print(f"⏭️ User skipped personalization, generating generic plan")
             session["onboarding_step"] = "done"
             session["messages"].append(HumanMessage(content="Suggest a personalized starting plan for me."))
-            threading.Thread(target=process_and_reply, args=(sender, True)).start()
+            
             resp = MessagingResponse()
             resp.message("🎯 Okay, preparing a general plan for you...")
+            
+            # Process async
+            threading.Thread(target=process_and_reply, args=(sender, True)).start()
+            print(f"✅ Generic plan generation started\n")
             return str(resp)
 
         try:
@@ -1141,51 +1192,47 @@ def whatsapp_webhook():
             session["injury"] = parts[3] if len(parts) > 3 else "None"
             session["onboarding_step"] = "done"
 
-            resp = MessagingResponse()
-            resp.message(
-                f"✅ Thanks {session['name']}! Got your details:\n"
-                f"- Age: {session['age']}\n- Gender: {session['gender']}\n"
-                f"- Weight: {session['weight']}\n- Height: {session['height']}\n"
-                f"- Goal: {session['fitness_goal']}\n- Injury: {session['injury']}\n\n"
-                "🎯 Let me suggest a personalised plan for your goal..."
+            response_text = (
+                f"✅ Perfect! Here's what I know about you:\n\n"
+                f"👤 *Profile:*\n"
+                f"• Name: {session['name']}\n"
+                f"• Age: {session['age']} yrs\n"
+                f"• Gender: {session['gender']}\n"
+                f"• Weight: {session['weight']}\n"
+                f"• Height: {session['height']}\n"
+                f"• Goal: {session['fitness_goal']}\n"
+                f"• Injury: {session['injury']}\n\n"
+                f"🎯 Creating your personalized plan...\n"
+                f"(This might take 30 seconds)"
             )
 
             session["messages"].append(HumanMessage(content="Suggest a personalized starting plan for me."))
-            threading.Thread(target=process_and_reply, args=(sender, True)).start()
             
-            # # Send helpful tips after a delay
-            # def send_tips():
-            #     tips_msg = (
-            #         "\n💡 *Quick Tips:*\n\n"
-            #         "You can ask me:\n"
-            #         "• 'Give me a weekly plan'\n"
-            #         "• 'What's my plan for today?'\n"
-            #         "• 'Can I substitute X with Y?'\n"
-            #         "• 'How many calories in chicken?'\n"
-            #         "• 'Set reminder for workout in 30 minutes'\n\n"
-            #         "I'm here to help! 💪"
-            #     )
-            #     client.messages.create(
-            #         from_=TWILIO_WHATSAPP_NUMBER,
-            #         to=sender,
-            #         body=tips_msg
-            #     )
-            
-            # threading.Timer(5.0, send_tips).start()
-            
-            return str(resp)
-        except Exception:
             resp = MessagingResponse()
-            resp.message("⚠️ Please reply in format: Weight , Height , Goal , Injuries")
+            resp.message(response_text)
+            
+            # Process async
+            threading.Thread(target=process_and_reply, args=(sender, True)).start()
+            print(f"✅ Personalized plan generation started\n")
+            return str(resp)
+            
+        except Exception as e:
+            print(f"❌ Error in personalization: {e}")
+            resp = MessagingResponse()
+            resp.message("⚠️ Please reply in format: Weight , Height , Goal , Injuries\n\nExample: 70kg , 5'10\" , Muscle Gain , Mild knee pain")
             return str(resp)
 
-    # Step 3: Normal conversation
+    # ─────────────────────────────────────────────────────────────────
+    # STEP 3D: NORMAL CONVERSATION (AFTER ONBOARDING)
+    # ─────────────────────────────────────────────────────────────────
+    
     if session["onboarding_step"] == "done":
-        
-        # Streak tracking functions
+        print(f"💬 Processing CONVERSATION for {sender}")
         msg_lower = incoming_msg.lower().strip()
         
+        # STREAK COMMANDS
         if msg_lower in ['streak', 'my streak', 'check streak', 'show streak', 'streak stats']:
+            print(f"📊 Processing streak command")
             streak_data = get_user_streak(sender)
             current = streak_data['current_streak']
             longest = streak_data['longest_streak']
@@ -1197,21 +1244,12 @@ def whatsapp_webhook():
                     "Complete a workout today to begin! 💪"
                 )
             else:
-                # Choose emoji based on streak
-                if current >= 7:
-                    emoji = "🔥"
-                elif current >= 3:
-                    emoji = "💪"
-                else:
-                    emoji = "✨"
-                
+                emoji = "🔥" if current >= 7 else ("💪" if current >= 3 else "✨")
                 message = (
                     f"{emoji} *Your Workout Streak*\n\n"
                     f"Current Streak: *{current} days* 🎯\n"
                     f"Longest Streak: *{longest} days* 🏆\n\n"
                 )
-                
-                # Add encouraging message
                 if current == longest and current >= 3:
                     message += "You're at your personal best! 🚀"
                 elif current >= 7:
@@ -1221,51 +1259,50 @@ def whatsapp_webhook():
             
             resp = MessagingResponse()
             resp.message(message)
+            print(f"✅ Streak info sent\n")
             return str(resp)
-
-        # ===== HANDLE TIP OPT-OUT/OPT-IN =====
-        msg_lower = incoming_msg.lower().strip()
         
+        # TIP OPT-OUT
         if msg_lower in ['stop tips', 'no tips', 'disable tips', 'unsubscribe tips']:
+            print(f"🔕 Disabling tips for {sender}")
             set_user_tip_preference(sender, False)
             resp = MessagingResponse()
-            resp.message(
-                "✅ You've been unsubscribed from daily mental health tips.\n\n"
-                "You can re-enable them anytime by sending 'START TIPS'."
-            )
+            resp.message("✅ You've unsubscribed from daily tips.\n\nYou can re-enable with: 'START TIPS'")
+            print(f"✅ Tips disabled\n")
             return str(resp)
         
+        # TIP OPT-IN
         if msg_lower in ['start tips', 'enable tips', 'resume tips', 'subscribe tips']:
+            print(f"🔔 Enabling tips for {sender}")
             set_user_tip_preference(sender, True)
             resp = MessagingResponse()
-            resp.message(
-                "✅ Daily mental health tips enabled!\n\n"
-                "You'll receive a morning wellness tip every day at 7:00 AM. 🌅"
-            )
+            resp.message("✅ Daily mental health tips enabled!\n\nYou'll get a tip at 7:00 AM every day. 🌅")
+            print(f"✅ Tips enabled\n")
             return str(resp)
-        # ===== END TIP HANDLING =====
         
-        # Handle reminders
-        if "remind" in incoming_msg.lower():
+        # REMINDERS
+        if "remind" in msg_lower:
+            print(f"⏰ Processing reminder request")
             try:
                 task, run_time = parse_reminder_message(incoming_msg)
                 if task and run_time:
                     session["reminders"].append({"text": task, "time": run_time})
                     schedule_reminder(sender, task, run_time)
                     resp = MessagingResponse()
-                    resp.message(f"✅ Reminder set: '{task}' at {run_time.strftime('%H:%M:%S')}")
+                    resp.message(f"✅ Reminder set!\n'{task}' at {run_time.strftime('%H:%M')}")
+                    print(f"✅ Reminder scheduled\n")
                     return str(resp)
                 else:
-                    raise ValueError("Invalid reminder format")
+                    raise ValueError("Invalid format")
             except Exception as e:
-                print("Reminder error:", e)
+                print(f"❌ Reminder error: {e}")
                 resp = MessagingResponse()
-                resp.message("⚠️ Couldn't set reminder. Use:\n- Remind me to <task> in <minutes>\n- Remind me to <task> at <HH:MM>")
+                resp.message("⚠️ Invalid reminder format.\nUse:\n• Remind me to <task> in <minutes>\n• Remind me to <task> at <HH:MM>")
                 return str(resp)
-
-        # Handle weekly/daily plan requests
-        msg_lower = incoming_msg.lower()
-        if any(word in msg_lower for word in ["weekly plan", "week plan", "7 day", "full week", "weekly routine", "weekly workout"]):
+        
+        # WEEKLY PLAN
+        if any(word in msg_lower for word in ["weekly plan", "week plan", "7 day", "weekly workout"]):
+            print(f"📅 Processing weekly plan request")
             session["messages"].append(HumanMessage(
                 content=f"Create a complete weekly workout plan (Monday to Sunday) for me based on my goal: {session['fitness_goal']}. "
                         f"Include rest days and specify which muscle groups to target each day."
@@ -1273,40 +1310,48 @@ def whatsapp_webhook():
             resp = MessagingResponse()
             resp.message("📅 Creating your weekly workout plan...")
             threading.Thread(target=process_and_reply, args=(sender, True)).start()
+            print(f"✅ Weekly plan generation started\n")
             return str(resp)
         
-        elif any(word in msg_lower for word in ["today", "today's plan", "workout for today"]):
-            session["messages"].append(HumanMessage(
-                content="What's my workout plan for today?"
-            ))
+        # TODAY'S PLAN
+        if any(word in msg_lower for word in ["today", "today's plan", "plan for today", "workout today"]):
+            print(f"📋 Processing today's plan request")
+            session["messages"].append(HumanMessage(content="What's my workout plan for today?"))
             resp = MessagingResponse()
-            resp.message("📋 Preparing today's workout plan...")
+            resp.message("📋 Preparing your workout plan for today...")
             threading.Thread(target=process_and_reply, args=(sender, True)).start()
+            print(f"✅ Today's plan generation started\n")
             return str(resp)
-
-        # IMPROVED: More lenient fitness topic check
+        
+        # FITNESS RELEVANCE CHECK
         if not is_fitness_related(incoming_msg):
+            print(f"⚠️ Non-fitness message from {sender}")
             resp = MessagingResponse()
             resp.message(
                 "⚠️ I specialize in fitness topics like workouts, diet, nutrition, and exercise.\n\n"
                 "Feel free to ask me anything about your fitness journey! 💪"
             )
+            print(f"⚠️ Non-fitness message rejected\n")
             return str(resp)
-
-        # Add message to history and process
+        
+        # REGULAR CONVERSATION
+        print(f"💬 Processing normal fitness conversation")
         session["messages"].append(HumanMessage(content=incoming_msg))
-        print(f"💬 Processing message. History length: {len(session['messages'])}")
-
         resp = MessagingResponse()
         resp.message("✅ Got it! Let me help you with that...")
         
-        # Determine if this is an initial plan request
         msg_lower = incoming_msg.lower()
-        is_plan_request = any(word in msg_lower for word in ["plan", "workout", "today", "weekly", "routine", "suggest"])
-
-        # Start only ONE thread with the appropriate flag
+        is_plan_request = any(word in msg_lower for word in ["plan", "workout", "today", "weekly", "routine"])
+        
         threading.Thread(target=process_and_reply, args=(sender, is_plan_request, incoming_msg)).start()
+        print(f"✅ Processing response\n")
         return str(resp)
+    
+    # Fallback (should never reach here)
+    print(f"❓ Unknown state for {sender}")
+    resp = MessagingResponse()
+    resp.message("⚠️ Something went wrong. Please try again.")
+    return str(resp)
 
 # -------------------------
 # Weekly Goal Check Feature
