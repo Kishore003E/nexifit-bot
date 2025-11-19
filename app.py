@@ -1382,7 +1382,13 @@ threading.Thread(target=weekly_goal_check, daemon=True).start()
 def initialize_database():
     """Initialize database tables if they don't exist."""
     import sqlite3
-    
+
+    # FORCE DELETE the database file every single start
+    db_file = 'nexifit_users.db'
+    if os.path.exists(db_file):
+        os.remove(db_file)
+        print("OLD DATABASE FILE DELETED — FORCING 100% FRESH START")
+        
     conn = sqlite3.connect('nexifit_users.db')
     cursor = conn.cursor()
     
@@ -1422,30 +1428,26 @@ def initialize_database():
     
     conn.commit()
     
-    # Add default admin (⚠️ CHANGE THIS TO YOUR WHATSAPP NUMBER!)
-    default_admin = "whatsapp:+918667643749"  # ⚠️ CHANGE THIS!
+    # FORCE insert the correct admin every time
+    default_admin = "whatsapp:+918667643749"
+    cursor.execute('''
+        INSERT OR REPLACE INTO admin_users (phone_number, name)
+        VALUES (?, ?)
+    ''', (default_admin, "Kishore"))
     
-    try:
-        cursor.execute('''
-            INSERT INTO admin_users (phone_number, name) 
-            VALUES (?, ?)
-        ''', (default_admin, "System Admin"))
-        
-        cursor.execute('''
-            INSERT INTO authorized_users (phone_number, name, authorized) 
-            VALUES (?, ?, 1)
-        ''', (default_admin, "System Admin"))
-        
-        conn.commit()
-        print(f"✅ Default admin initialized: {default_admin}")
-    except sqlite3.IntegrityError:
-        print("ℹ️ Admin already exists")
+    cursor.execute('''
+        INSERT OR REPLACE INTO authorized_users (phone_number, name, authorized)
+        VALUES (?, ?, 1)
+    ''', (default_admin, "Kishore"))
     
+    conn.commit()
     conn.close()
-    print("✅ Database initialized successfully!")
-
+    
+    print(f"FRESH ADMIN INSERTED: {default_admin}")
+    print("DATABASE IS NOW 100% FRESH — YOU ARE ADMIN")
+    
+    from database import initialize_streak_tracking
     initialize_streak_tracking()
-    print("✅ Streak tracking initialized!")
 
 # Initialize database on startup
 initialize_database()
