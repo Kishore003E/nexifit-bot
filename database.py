@@ -1,9 +1,10 @@
 import sqlite3
+import os
 from datetime import datetime, date
 from contextlib import contextmanager
 import random
 
-DB_NAME = 'nexifit_users.db'
+DB_NAME = os.environ.get('DB_PATH', '/tmp/nexifit_users.db')
 
 @contextmanager
 def get_db_connection():

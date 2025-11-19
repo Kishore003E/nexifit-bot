@@ -1,6 +1,7 @@
 import os
 import re
 import threading
+import sys
 from datetime import datetime, timedelta
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
@@ -37,6 +38,10 @@ TWILIO_SID = os.environ.get("TWILIO_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
 ADMIN_CONTACT = os.environ.get("ADMIN_CONTACT", "admin@nexifit.com")
+
+# Railway environment configuration
+PORT = int(os.environ.get('PORT', 5000))
+DB_PATH = os.environ.get('DB_PATH', '/tmp/nexifit_users.db')
 
 client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
 
@@ -1388,4 +1393,12 @@ def health():
     return "OK", 200
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    # Initialize database at startup
+    initialize_database()
+    
+    # Run Flask app on Railway's assigned port
+    app.run(
+        host='0.0.0.0',  # Listen on all interfaces (required for Railway)
+        port=PORT,
+        debug=False  # Must be False in production
+    )

@@ -1,6 +1,13 @@
-*.db
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
 venv/
+*.db
+*.sqlite
 .DS_Store
+.env
+nexifit_users.db
+/tmp/
