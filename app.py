@@ -24,7 +24,10 @@ from database import (
     get_user_tip_preference, get_users_for_daily_tips, get_user_tip_stats,
     get_global_tip_stats, get_tip_by_id,
     # Workout tracking functions
-    log_workout_completion, get_weekly_progress, get_users_for_weekly_report
+    log_workout_completion, get_weekly_progress, get_users_for_weekly_report,
+    get_personalized_bonus_tips,
+    # Streak tracking functions
+    initialize_streak_tracking, update_workout_streak, get_user_streak
 )
 
 # -------------------------
@@ -290,6 +293,14 @@ def send_weekly_progress_reports():
                     f"━━━━━━━━━━━━━━━━\n"
                     f"Keep the momentum! 🚀"
                 )
+
+                # Streak report add on
+                streak_data = get_user_streak(phone_number)
+                if streak_data['current_streak'] > 0:
+                    streak_emoji = "🔥" if streak_data['current_streak'] >= 7 else "💪"
+                    message += f"{streak_emoji} *Current Streak:* {streak_data['current_streak']} days\n\n"
+                
+                message += "━━━━━━━━━━━━━━━━\nKeep the momentum! 🚀"
             
             # Send message
             client.messages.create(
@@ -755,7 +766,7 @@ def is_fitness_related(message):
 # -------------------------
 # Background reply processor (UPDATED)
 # -------------------------
-def process_and_reply(sender, is_initial_plan=False):
+def process_and_reply(sender, is_initial_plan=False, incoming_msg=""):
     try:
         session = user_sessions[sender]
 
@@ -787,7 +798,17 @@ def process_and_reply(sender, is_initial_plan=False):
 
         state = {"messages": [fitness_system_prompt, system_context] + session["messages"]}
         result = graph.invoke(state)
-        response_text = result["messages"][-1].content
+        response_text = result["messages"][-1].content.strip()
+
+        # === ADD PERSONALIZED BONUS TIPS (Only for initial/today's plan) ===
+        msg_lower = incoming_msg.lower() if incoming_msg else ""
+        if is_initial_plan or "today" in msg_lower or "plan" in msg_lower or "workout" in msg_lower:
+            bonus_tips = get_personalized_bonus_tips(session)
+            if bonus_tips:
+                bonus_section = "\n\n*Bonus Tips Curated Just For You*\n"
+                for tip in bonus_tips:
+                    bonus_section += f"• {tip}\n"
+                response_text += bonus_section
 
         # Only add reminder prompt and schedule motivational message for initial plans
         if is_initial_plan:
@@ -824,6 +845,16 @@ def process_and_reply(sender, is_initial_plan=False):
                         session["fitness_goal"]
                     )
 
+                    # Update streak tracking
+                    current_streak, is_new_record, broke_streak = update_workout_streak(sender)
+                    
+                    # Store in session for motivational message
+                    session['latest_streak'] = {
+                        'current': current_streak,
+                        'is_record': is_new_record,
+                        'broke': broke_streak
+                    }
+
                 except Exception as e:
                     print("Calorie calculation error:", e)
 
@@ -844,6 +875,31 @@ def process_and_reply(sender, is_initial_plan=False):
                     f"and you're about {progress_percent or 0}% closer to your goal: *{session['fitness_goal']}*.\n"
                     "Keep it up! 💪"
                 )
+
+                # Streak tracking
+                streak_info = session.get('latest_streak')
+                if streak_info:
+                    current = streak_info['current']
+                    
+                    # New record celebration
+                    if streak_info['is_record']:
+                        motivational_msg += f"\n🏆 *NEW RECORD!* {current} day streak! You're unstoppable! 🚀"
+                    # Strong streak (7+ days)
+                    elif current >= 7:
+                        motivational_msg += f"\n🔥 *{current} days in a row!* You're on fire! 💪"
+                    # Good streak (3-6 days)
+                    elif current >= 3:
+                        motivational_msg += f"\n✨ *{current} days streak!* Keep the momentum! 💪"
+                    # Starting streak
+                    else:
+                        motivational_msg += f"\n💪 Day {current} done! Every day counts!"
+                    
+                    # Streak broken message
+                    if streak_info['broke']:
+                        motivational_msg += "\n\n🌱 New streak started! Let's build it up again!"
+                
+                motivational_msg += "\n\nKeep it up! 💪"
+
                 run_time = datetime.now() + timedelta(minutes=workout_minutes)
                 scheduler.add_job(
                     client.messages.create,
@@ -858,7 +914,47 @@ def process_and_reply(sender, is_initial_plan=False):
                 print(f"Motivational message scheduled for {sender} in {workout_minutes} min")
 
         # Send Main LLM Response
-        chunks = [response_text[i:i + 1500] for i in range(0, len(response_text), 1500)]
+        # Smart chunking: split at sentence boundaries, not mid-sentence
+        def smart_chunk(text, max_length=1500):
+            if len(text) <= max_length:
+                return [text]
+            
+            chunks = []
+            while text:
+                if len(text) <= max_length:
+                    chunks.append(text)
+                    break
+                
+                # Find the last sentence boundary before max_length
+                chunk = text[:max_length]
+                
+                # Look for sentence endings: . ! ? followed by space or newline
+                last_period = max(chunk.rfind('. '), chunk.rfind('.\n'))
+                last_exclaim = max(chunk.rfind('! '), chunk.rfind('!\n'))
+                last_question = max(chunk.rfind('? '), chunk.rfind('?\n'))
+                
+                split_pos = max(last_period, last_exclaim, last_question)
+                
+                # If no sentence boundary found, look for newlines
+                if split_pos == -1:
+                    split_pos = chunk.rfind('\n')
+                
+                # If still nothing, split at last space
+                if split_pos == -1:
+                    split_pos = chunk.rfind(' ')
+                
+                # If still nothing (no spaces), just split at max_length
+                if split_pos == -1:
+                    split_pos = max_length - 1
+                else:
+                    split_pos += 1  # Include the punctuation/newline
+                
+                chunks.append(text[:split_pos].strip())
+                text = text[split_pos:].strip()
+            
+            return chunks
+
+        chunks = smart_chunk(response_text, 1500)
         session["messages"].append(result["messages"][-1])
 
         total_parts = len(chunks)
@@ -1063,6 +1159,47 @@ def whatsapp_webhook():
     # Step 3: Normal conversation
     if session["onboarding_step"] == "done":
         
+        # Streak tracking functions
+        msg_lower = incoming_msg.lower().strip()
+        
+        if msg_lower in ['streak', 'my streak', 'check streak', 'show streak', 'streak stats']:
+            streak_data = get_user_streak(sender)
+            current = streak_data['current_streak']
+            longest = streak_data['longest_streak']
+            
+            if current == 0:
+                message = (
+                    "📊 *Your Workout Streak*\n\n"
+                    "You haven't started your streak yet!\n"
+                    "Complete a workout today to begin! 💪"
+                )
+            else:
+                # Choose emoji based on streak
+                if current >= 7:
+                    emoji = "🔥"
+                elif current >= 3:
+                    emoji = "💪"
+                else:
+                    emoji = "✨"
+                
+                message = (
+                    f"{emoji} *Your Workout Streak*\n\n"
+                    f"Current Streak: *{current} days* 🎯\n"
+                    f"Longest Streak: *{longest} days* 🏆\n\n"
+                )
+                
+                # Add encouraging message
+                if current == longest and current >= 3:
+                    message += "You're at your personal best! 🚀"
+                elif current >= 7:
+                    message += "Amazing consistency! Keep going! 💪"
+                else:
+                    message += "Keep building that momentum! 💪"
+            
+            resp = MessagingResponse()
+            resp.message(message)
+            return str(resp)
+
         # ===== HANDLE TIP OPT-OUT/OPT-IN =====
         msg_lower = incoming_msg.lower().strip()
         
@@ -1139,7 +1276,13 @@ def whatsapp_webhook():
 
         resp = MessagingResponse()
         resp.message("✅ Got it! Let me help you with that...")
-        threading.Thread(target=process_and_reply, args=(sender, False)).start()
+        
+        # Determine if this is an initial plan request
+        msg_lower = incoming_msg.lower()
+        is_plan_request = any(word in msg_lower for word in ["plan", "workout", "today", "weekly", "routine", "suggest"])
+
+        # Start only ONE thread with the appropriate flag
+        threading.Thread(target=process_and_reply, args=(sender, is_plan_request, incoming_msg)).start()
         return str(resp)
 
 # -------------------------
@@ -1232,6 +1375,9 @@ def initialize_database():
     
     conn.close()
     print("✅ Database initialized successfully!")
+
+    initialize_streak_tracking()
+    print("✅ Streak tracking initialized!")
 
 # Initialize database on startup
 initialize_database()

@@ -24,7 +24,7 @@ def get_db_connection():
 # =====================
 
 def is_user_authorized(phone_number):
-    """Check if a phone number is authorized to use the bot."""
+    """Check if a phone number is authorized AND not expired."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -38,15 +38,28 @@ def is_user_authorized(phone_number):
         if not result:
             return False
         
-        # Check if authorized
-        if result['authorized'] != 1:
+        authorized = result['authorized']
+        expiry_date_str = result['expiry_date']
+        
+        # If manually deactivated
+        if not authorized:
             return False
         
-        # Check expiry date if set
-        if result['expiry_date']:
-            expiry = datetime.fromisoformat(result['expiry_date'])
-            if datetime.now() > expiry:
-                return False
+        # If expiry date is set, check if expired
+        if expiry_date_str:
+            try:
+                # Handle both formats: with and without microseconds
+                if '.' in expiry_date_str:
+                    expiry_date = datetime.strptime(expiry_date_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+                else:
+                    expiry_date = datetime.strptime(expiry_date_str, '%Y-%m-%d %H:%M:%S')
+                
+                if datetime.now() > expiry_date:
+                    return False  # Expired
+            except ValueError as e:
+                print(f"Warning: Invalid expiry_date format for {phone_number}: {expiry_date_str}")
+                # Optionally treat invalid date as no expiry or expired
+                pass
         
         return True
 
@@ -489,4 +502,265 @@ def get_users_for_weekly_report():
         ''')
         return cursor.fetchall()
     
+# =====================
+# BONUS PERSONALIZED TIPS ENGINE
+# =====================
 
+def get_personalized_bonus_tips(user_data):
+    """
+    Returns 1-2 highly relevant bonus tips based on user's profile.
+    user_data = session dict from main.py (name, gender, age, fitness_goal, injury, etc.)
+    """
+    tips = []
+    gender = str(user_data.get("gender", "")).strip().lower()
+    goal = str(user_data.get("fitness_goal", "")).strip().lower()
+    injury = str(user_data.get("injury", "")).strip().lower()
+    age = user_data.get("age")
+    name = user_data.get("name", "there")
+
+    # ── FEMALE-SPECIFIC TIPS ─────────────────────────────────────
+    if gender in ["female", "woman", "f", "girl"]:
+        tips.append("As a woman, your energy & strength fluctuate with your menstrual cycle. "
+                    "Train heavy during follicular phase (Day 1–14), go lighter during luteal phase. "
+                    "Listen to your body — it's smart!")
+
+        if "pcod" in goal or "pcos" in goal or "pcod" in injury or "pcos" in injury:
+            tips.append("For PCOS/PCOD: Cut dairy completely for 30 days — switch to almond/coconut milk. "
+                        "Add spearmint tea 2x/day & inositol-rich foods (citrus, beans). "
+                        "Many users see major hormone improvement!")
+
+        if "period" in injury.lower() or "cramps" in injury.lower():
+            tips.append("Heavy periods or cramps? Avoid intense lower abs & high-impact on Day 1–2. "
+                        "Try yoga flows, walking, or light mobility. Your body is doing heavy work already!")
+
+    # ── MALE-SPECIFIC TIPS ───────────────────────────────────────
+    if gender in ["male", "man", "m", "boy"]:
+        if "testosterone" in goal or "muscle" in goal or "strength" in goal:
+            tips.append("Men build max muscle when sleep >7.5 hrs + train in evening (4–7 PM) "
+                        "when testosterone peaks. Morning cardio = fat loss. Evening weights = muscle gain!")
+
+    # ── INJURY-SPECIFIC TIPS ─────────────────────────────────────
+    if injury and injury != "none":
+        if any(word in injury for word in ["knee", "acl", "meniscus"]):
+            tips.append("Knee injury? Replace squats/jumps with Spanish squats, reverse sled drags, "
+                        "or step-ups. Build quads without stressing the joint!")
+
+        if any(word in injury for word in ["back", "lower back", "disc", "herniated"]):
+            tips.append("Lower back pain? Master the McGill Big 3 (curl-up, side plank, bird dog) daily. "
+                        "Avoid crunches & sit-ups. Deadlifts only after 3 months pain-free!")
+
+        if any(word in injury for word in ["shoulder", "rotator", "impingement"]):
+            tips.append("Shoulder issues? Stop bench press for 4–6 weeks. Focus on face pulls, "
+                        "band pull-aparts & Cuban presses. Fix posture = fix shoulder!")
+
+    # ── GOAL-SPECIFIC TIPS ───────────────────────────────────────
+    if "weight loss" in goal or "fat loss" in goal or "lose weight" in goal:
+        tips.append("*Pro tip:* Walk 8–10k steps daily + strength training 3x/week "
+                    "burns MORE fat than cardio alone. Muscle = 24/7 calorie burner!")
+
+    if "muscle" in goal or "bulk" in goal or "gain" in goal:
+        tips.append("Want to gain muscle fast? Eat in surplus + sleep 8+ hrs + "
+                    "train each muscle 2x/week. Progressive overload is king!")
+
+    if "flexibility" in goal or "yoga" in goal or "mobility" in goal:
+        tips.append("Stretch daily for 10 mins (same time every day). Consistency > intensity. "
+                    "Hold each stretch 30–60s. You'll be touching your toes in 30 days!")
+
+    # ── AGE-SPECIFIC (Optional future use)
+    # if age and int(age) > 45:
+    #     tips.append("After 45, recovery is priority #1. Add 1 extra rest day, prioritize protein (1.6g/kg), and sleep!")
+
+    # Return only top 2 most relevant tips
+    return tips[:2]
+
+
+# =====================
+# STREAK TRACKING FUNCTIONS
+# =====================
+# Add this section at the END of your database.py file, after the BONUS PERSONALIZED TIPS ENGINE section
+
+def initialize_streak_tracking():
+    """Initialize streak tracking table. Call this once during app startup."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS workout_streaks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT UNIQUE NOT NULL,
+                    current_streak INTEGER DEFAULT 0,
+                    longest_streak INTEGER DEFAULT 0,
+                    last_workout_date DATE,
+                    FOREIGN KEY (phone_number) REFERENCES authorized_users(phone_number)
+                )
+            ''')
+            
+            print("✅ Streak tracking table initialized!")
+            return True
+    except Exception as e:
+        print(f"❌ Error initializing streak tracking: {e}")
+        return False
+
+
+def update_workout_streak(phone_number):
+    """
+    Update user's workout streak when they complete a workout.
+    
+    Logic:
+    - If workout on consecutive day → increment streak
+    - If workout after gap → reset to 1 (streak broken)
+    - If same day → no change (already counted)
+    
+    Returns:
+        tuple: (current_streak, is_new_record, broke_streak)
+        
+    Example:
+        (5, True, False) = 5 days streak, new personal record, didn't break
+        (1, False, True) = reset to 1, not a record, streak was broken
+    """
+    from datetime import timedelta
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        today = date.today()
+        
+        # Get existing streak data
+        cursor.execute('''
+            SELECT current_streak, longest_streak, last_workout_date 
+            FROM workout_streaks 
+            WHERE phone_number = ?
+        ''', (phone_number,))
+        
+        result = cursor.fetchone()
+        
+        # ── FIRST TIME USER ──────────────────────────
+        if not result:
+            cursor.execute('''
+                INSERT INTO workout_streaks (phone_number, current_streak, longest_streak, last_workout_date)
+                VALUES (?, 1, 1, ?)
+            ''', (phone_number, today))
+            print(f"🎉 First workout logged for {phone_number}")
+            return (1, True, False)  # streak=1, new_record=True, broke_streak=False
+        
+        # ── EXISTING USER ────────────────────────────
+        current_streak = result['current_streak']
+        longest_streak = result['longest_streak']
+        last_workout_date = result['last_workout_date']
+        
+        # Parse last workout date
+        if last_workout_date:
+            last_date = date.fromisoformat(last_workout_date)
+        else:
+            last_date = None
+        
+        # ── SAME DAY (Already worked out today) ──────
+        if last_date == today:
+            print(f"ℹ️ Workout already logged today for {phone_number}")
+            return (current_streak, False, False)  # No change
+        
+        # ── CONSECUTIVE DAY (Yesterday) ──────────────
+        if last_date == today - timedelta(days=1):
+            current_streak += 1
+            broke_streak = False
+            print(f"🔥 Streak continues! {current_streak} days for {phone_number}")
+        
+        # ── STREAK BROKEN (Gap detected) ─────────────
+        elif last_date and last_date < today - timedelta(days=1):
+            current_streak = 1
+            broke_streak = True
+            print(f"🌱 Streak reset for {phone_number}. Starting fresh!")
+        
+        # ── EDGE CASE (First workout or unusual scenario) ──
+        else:
+            current_streak = 1
+            broke_streak = False
+        
+        # ── CHECK IF NEW RECORD ──────────────────────
+        is_new_record = current_streak > longest_streak
+        if is_new_record:
+            longest_streak = current_streak
+            print(f"🏆 NEW RECORD! {current_streak} days for {phone_number}")
+        
+        # ── UPDATE DATABASE ──────────────────────────
+        cursor.execute('''
+            UPDATE workout_streaks 
+            SET current_streak = ?, 
+                longest_streak = ?, 
+                last_workout_date = ?
+            WHERE phone_number = ?
+        ''', (current_streak, longest_streak, today, phone_number))
+        
+        return (current_streak, is_new_record, broke_streak)
+
+
+def get_user_streak(phone_number):
+    """
+    Get user's current streak information.
+    
+    Returns:
+        dict: {
+            'current_streak': int,
+            'longest_streak': int,
+            'last_workout_date': str (YYYY-MM-DD) or None
+        }
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT current_streak, longest_streak, last_workout_date
+            FROM workout_streaks
+            WHERE phone_number = ?
+        ''', (phone_number,))
+        
+        result = cursor.fetchone()
+        
+        # If user hasn't started tracking yet
+        if not result:
+            return {
+                'current_streak': 0,
+                'longest_streak': 0,
+                'last_workout_date': None
+            }
+        
+        return {
+            'current_streak': result['current_streak'],
+            'longest_streak': result['longest_streak'],
+            'last_workout_date': result['last_workout_date']
+        }
+
+
+def get_streak_leaderboard(limit=10):
+    """
+    Get top users by current streak (optional feature for gamification).
+    
+    Args:
+        limit: Number of top users to return
+        
+    Returns:
+        list: Top users sorted by current streak
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT 
+                ws.phone_number,
+                au.name,
+                ws.current_streak,
+                ws.longest_streak
+            FROM workout_streaks ws
+            JOIN authorized_users au ON ws.phone_number = au.phone_number
+            WHERE au.authorized = 1
+            ORDER BY ws.current_streak DESC, ws.longest_streak DESC
+            LIMIT ?
+        ''', (limit,))
+        
+        return cursor.fetchall()
+
+
+# =====================
+# END OF STREAK TRACKING
+# =====================
