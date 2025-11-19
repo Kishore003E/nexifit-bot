@@ -21,11 +21,145 @@ def get_db_connection():
         conn.close()
 
 # =====================
+# INITIALIZATION FUNCTION (FIX - ENSURE ALL TABLES CREATED)
+# =====================
+
+def ensure_all_tables_exist():
+    """
+    Create all required tables if they don't exist.
+    This is the MAIN FIX - called at startup and before each operation.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 1. AUTHORIZED USERS TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS authorized_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT UNIQUE NOT NULL,
+                    name TEXT,
+                    authorized INTEGER DEFAULT 1,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    expiry_date TIMESTAMP,
+                    notes TEXT
+                )
+            ''')
+            
+            # 2. ADMIN USERS TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admin_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT UNIQUE NOT NULL,
+                    name TEXT,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 3. AUTH LOGS TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS auth_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    success INTEGER DEFAULT 0
+                )
+            ''')
+            
+            # 4. WORKOUT LOGS TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS workout_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT NOT NULL,
+                    workout_minutes INTEGER,
+                    calories_burned INTEGER,
+                    progress_percent REAL,
+                    goal TEXT,
+                    date_completed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (phone_number) REFERENCES authorized_users(phone_number)
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_workout_logs_phone_date 
+                ON workout_logs(phone_number, date_completed)
+            ''')
+            
+            # 5. MENTAL HEALTH TIPS TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS mental_health_tips (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tip_text TEXT NOT NULL,
+                    category TEXT DEFAULT 'general',
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    active INTEGER DEFAULT 1
+                )
+            ''')
+            
+            # 6. USER TIP PREFERENCES TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_tip_preferences (
+                    phone_number TEXT PRIMARY KEY,
+                    receive_tips INTEGER DEFAULT 1,
+                    preferred_time TEXT DEFAULT '07:00',
+                    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (phone_number) REFERENCES authorized_users(phone_number)
+                )
+            ''')
+            
+            # 7. USER TIP HISTORY TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_tip_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT NOT NULL,
+                    tip_id INTEGER NOT NULL,
+                    sent_date DATE NOT NULL,
+                    sent_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (tip_id) REFERENCES mental_health_tips(id),
+                    FOREIGN KEY (phone_number) REFERENCES authorized_users(phone_number)
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_tip_history_phone 
+                ON user_tip_history(phone_number)
+            ''')
+            
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_tip_history_date 
+                ON user_tip_history(sent_date)
+            ''')
+            
+            # 8. WORKOUT STREAKS TABLE
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS workout_streaks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT UNIQUE NOT NULL,
+                    current_streak INTEGER DEFAULT 0,
+                    longest_streak INTEGER DEFAULT 0,
+                    last_workout_date DATE,
+                    FOREIGN KEY (phone_number) REFERENCES authorized_users(phone_number)
+                )
+            ''')
+            
+            conn.commit()
+            print("✅ All database tables verified/created!")
+            return True
+            
+    except Exception as e:
+        print(f"❌ Error creating tables: {e}")
+        return False
+
+
+# =====================
 # AUTHENTICATION FUNCTIONS
 # =====================
 
 def is_user_authorized(phone_number):
     """Check if a phone number is authorized AND not expired."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -59,13 +193,14 @@ def is_user_authorized(phone_number):
                     return False  # Expired
             except ValueError as e:
                 print(f"Warning: Invalid expiry_date format for {phone_number}: {expiry_date_str}")
-                # Optionally treat invalid date as no expiry or expired
                 pass
         
         return True
 
 def is_admin(phone_number):
     """Check if a phone number is an admin."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -75,6 +210,8 @@ def is_admin(phone_number):
 
 def log_auth_attempt(phone_number, action, success=False):
     """Log authentication attempts for security."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -88,6 +225,8 @@ def log_auth_attempt(phone_number, action, success=False):
 
 def add_user(phone_number, name=None, expiry_days=None):
     """Add a new authorized user."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -116,6 +255,8 @@ def add_user(phone_number, name=None, expiry_days=None):
 
 def remove_user(phone_number):
     """Remove/deactivate a user."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -131,6 +272,8 @@ def remove_user(phone_number):
 
 def reactivate_user(phone_number):
     """Reactivate a previously deactivated user."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -146,6 +289,8 @@ def reactivate_user(phone_number):
 
 def list_all_users():
     """Get list of all users."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -157,6 +302,8 @@ def list_all_users():
 
 def get_user_info(phone_number):
     """Get detailed info about a specific user."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -170,6 +317,8 @@ def get_user_info(phone_number):
 
 def get_total_users():
     """Get total number of authorized users."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('SELECT COUNT(*) as count FROM authorized_users WHERE authorized = 1')
@@ -177,6 +326,8 @@ def get_total_users():
 
 def clean_expired_users():
     """Deactivate users whose subscription has expired."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -197,6 +348,8 @@ def clean_expired_users():
 
 def add_mental_health_tip(tip_text, category='general'):
     """Add a new mental health tip."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -210,6 +363,8 @@ def add_mental_health_tip(tip_text, category='general'):
 
 def get_all_mental_health_tips(active_only=True):
     """Get all mental health tips."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         if active_only:
@@ -227,6 +382,8 @@ def get_all_mental_health_tips(active_only=True):
 
 def get_tip_by_id(tip_id):
     """Get a specific tip by ID."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -236,6 +393,8 @@ def get_tip_by_id(tip_id):
 
 def deactivate_tip(tip_id):
     """Deactivate a mental health tip."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -251,6 +410,8 @@ def deactivate_tip(tip_id):
 
 def activate_tip(tip_id):
     """Reactivate a mental health tip."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -270,6 +431,8 @@ def get_next_tip_for_user(phone_number):
     Avoids tips sent in the last 15 days.
     If all tips exhausted, resets and starts over.
     """
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
@@ -309,6 +472,8 @@ def get_next_tip_for_user(phone_number):
 
 def log_tip_sent(phone_number, tip_id):
     """Log that a tip was sent to a user."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -327,6 +492,8 @@ def log_tip_sent(phone_number, tip_id):
 
 def set_user_tip_preference(phone_number, receive_tips=True):
     """Set user's preference for receiving daily tips."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -344,6 +511,8 @@ def set_user_tip_preference(phone_number, receive_tips=True):
 
 def get_user_tip_preference(phone_number):
     """Get user's tip preferences."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -360,6 +529,8 @@ def get_user_tip_preference(phone_number):
 
 def get_users_for_daily_tips():
     """Get all users who should receive daily tips."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -377,6 +548,8 @@ def get_users_for_daily_tips():
 
 def get_user_tip_stats(phone_number):
     """Get statistics about tips sent to a user."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
@@ -410,6 +583,8 @@ def get_user_tip_stats(phone_number):
 
 def get_global_tip_stats():
     """Get global statistics about tips."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
@@ -446,12 +621,15 @@ def get_global_tip_stats():
             'users_with_tips_enabled': users_enabled,
             'tips_by_category': dict(categories)
         }
+
 # =====================
 # WORKOUT TRACKING FUNCTIONS
 # =====================
 
 def log_workout_completion(phone_number, workout_minutes, calories_burned, progress_percent, goal):
     """Save workout data for progress tracking."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -466,6 +644,8 @@ def log_workout_completion(phone_number, workout_minutes, calories_burned, progr
 
 def get_weekly_progress(phone_number):
     """Get user's workout stats for the last 7 days."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -494,6 +674,8 @@ def get_weekly_progress(phone_number):
 
 def get_users_for_weekly_report():
     """Get all active users for sending weekly reports."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -502,7 +684,7 @@ def get_users_for_weekly_report():
             WHERE authorized = 1
         ''')
         return cursor.fetchall()
-    
+
 # =====================
 # BONUS PERSONALIZED TIPS ENGINE
 # =====================
@@ -567,10 +749,6 @@ def get_personalized_bonus_tips(user_data):
         tips.append("Stretch daily for 10 mins (same time every day). Consistency > intensity. "
                     "Hold each stretch 30–60s. You'll be touching your toes in 30 days!")
 
-    # ── AGE-SPECIFIC (Optional future use)
-    # if age and int(age) > 45:
-    #     tips.append("After 45, recovery is priority #1. Add 1 extra rest day, prioritize protein (1.6g/kg), and sleep!")
-
     # Return only top 2 most relevant tips
     return tips[:2]
 
@@ -578,10 +756,11 @@ def get_personalized_bonus_tips(user_data):
 # =====================
 # STREAK TRACKING FUNCTIONS
 # =====================
-# Add this section at the END of your database.py file, after the BONUS PERSONALIZED TIPS ENGINE section
 
 def initialize_streak_tracking():
     """Initialize streak tracking table. Call this once during app startup."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -615,11 +794,9 @@ def update_workout_streak(phone_number):
     
     Returns:
         tuple: (current_streak, is_new_record, broke_streak)
-        
-    Example:
-        (5, True, False) = 5 days streak, new personal record, didn't break
-        (1, False, True) = reset to 1, not a record, streak was broken
     """
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     from datetime import timedelta
     
     with get_db_connection() as conn:
@@ -643,7 +820,7 @@ def update_workout_streak(phone_number):
                 VALUES (?, 1, 1, ?)
             ''', (phone_number, today))
             print(f"🎉 First workout logged for {phone_number}")
-            return (1, True, False)  # streak=1, new_record=True, broke_streak=False
+            return (1, True, False)
         
         # ── EXISTING USER ────────────────────────────
         current_streak = result['current_streak']
@@ -659,7 +836,7 @@ def update_workout_streak(phone_number):
         # ── SAME DAY (Already worked out today) ──────
         if last_date == today:
             print(f"ℹ️ Workout already logged today for {phone_number}")
-            return (current_streak, False, False)  # No change
+            return (current_streak, False, False)
         
         # ── CONSECUTIVE DAY (Yesterday) ──────────────
         if last_date == today - timedelta(days=1):
@@ -707,6 +884,8 @@ def get_user_streak(phone_number):
             'last_workout_date': str (YYYY-MM-DD) or None
         }
     """
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
@@ -743,6 +922,8 @@ def get_streak_leaderboard(limit=10):
     Returns:
         list: Top users sorted by current streak
     """
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
