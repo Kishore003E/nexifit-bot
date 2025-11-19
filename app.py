@@ -998,19 +998,37 @@ def whatsapp_webhook():
     print(f"📩 Incoming from {sender}: {incoming_msg}")
 
     # =============================
-    # 🔐 AUTHENTICATION CHECK
+    # 🔐 CHECK ADMIN FIRST (before user auth)
     # =============================
     
-    # Check if admin command
     if incoming_msg.upper().startswith("ADMIN"):
-        admin_response = handle_admin_command(sender, incoming_msg)
-        if admin_response:
+        # Admin commands don't need user authorization
+        # They just need to be an admin
+        if is_admin(sender):
+            admin_response = handle_admin_command(sender, incoming_msg)
+            if admin_response:
+                resp = MessagingResponse()
+                resp.message(admin_response)
+                log_auth_attempt(sender, "admin_command", success=True)
+                print(f"✅ Admin command executed by {sender}")
+                return str(resp)
+        else:
+            # Not an admin, reject
             resp = MessagingResponse()
-            resp.message(admin_response)
-            log_auth_attempt(sender, "admin_command", success=True)
+            resp.message(
+                f"⛔ *Access Denied*\n\n"
+                f"You don't have admin privileges.\n\n"
+                f"Please contact the admin to get access:\n"
+                f"📧 {ADMIN_CONTACT}"
+            )
+            log_auth_attempt(sender, "unauthorized_admin_attempt", success=False)
+            print(f"❌ Unauthorized admin attempt: {sender}")
             return str(resp)
     
-    # Check if user is authorized
+    # =============================
+    # 🔐 CHECK USER AUTHORIZATION (for regular users)
+    # =============================
+    
     if not is_user_authorized(sender):
         log_auth_attempt(sender, "unauthorized_access", success=False)
         resp = MessagingResponse()
