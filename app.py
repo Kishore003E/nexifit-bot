@@ -1380,20 +1380,13 @@ threading.Thread(target=weekly_goal_check, daemon=True).start()
 # Auto-initialize database on startup
 # -------------------------
 def initialize_database():
-    """Initialize database tables if they don't exist - FORCE FRESH START."""
+    """Initialize database tables if they don't exist."""
     import sqlite3
-    import os
     
-    # DELETE OLD DB TO FORCE RESET (CRITICAL FOR RAILWAY /tmp)
-    db_file = 'nexifit_users.db'
-    if os.path.exists(db_file):
-        os.remove(db_file)
-        print("🗑️ OLD DB DELETED - FORCING FRESH START")
-    
-    conn = sqlite3.connect(db_file)
+    conn = sqlite3.connect('nexifit_users.db')
     cursor = conn.cursor()
     
-    # Create tables (same as before)
+    # Create authorized users table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS authorized_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1406,6 +1399,7 @@ def initialize_database():
         )
     ''')
     
+    # Create admin users table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admin_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1415,6 +1409,7 @@ def initialize_database():
         )
     ''')
     
+    # Create audit log table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS auth_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1427,35 +1422,28 @@ def initialize_database():
     
     conn.commit()
     
-    # Add default admin
-    default_admin = "whatsapp:+918667643749"
+    # Add default admin (⚠️ CHANGE THIS TO YOUR WHATSAPP NUMBER!)
+    default_admin = "whatsapp:+918667643749"  # ⚠️ CHANGE THIS!
+    
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO admin_users (phone_number, name)
+            INSERT INTO admin_users (phone_number, name) 
             VALUES (?, ?)
         ''', (default_admin, "System Admin"))
         
         cursor.execute('''
-            INSERT OR REPLACE INTO authorized_users (phone_number, name, authorized)
+            INSERT INTO authorized_users (phone_number, name, authorized) 
             VALUES (?, ?, 1)
         ''', (default_admin, "System Admin"))
         
         conn.commit()
-        print(f"✅ Default admin FORCED: {default_admin}")
-        
-        # DEBUG: Verify insert worked
-        cursor.execute('SELECT phone_number FROM admin_users WHERE phone_number = ?', (default_admin,))
-        result = cursor.fetchone()
-        print(f"🔍 DB VERIFY: Admin found? {result is not None} | Stored: {result['phone_number'] if result else 'MISSING'}")
-        
-    except sqlite3.IntegrityError as e:
-        print(f"❌ DB Insert Error: {e}")
+        print(f"✅ Default admin initialized: {default_admin}")
+    except sqlite3.IntegrityError:
+        print("ℹ️ Admin already exists")
     
     conn.close()
-    print("✅ Database FORCED fresh & initialized!")
-    
-    # Call streak init (from database.py)
-    from database import initialize_streak_tracking
+    print("✅ Database initialized successfully!")
+
     initialize_streak_tracking()
     print("✅ Streak tracking initialized!")
 
