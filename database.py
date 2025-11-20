@@ -4,7 +4,7 @@ from datetime import datetime, date
 from contextlib import contextmanager
 import random
 
-DB_NAME = os.environ.get('DB_PATH', 'nexifit_users.db')  # Changed default from /tmp/
+DB_NAME = os.environ.get('DB_PATH', '/data/nexifit_users.db')  # Changed default from /tmp/
 
 @contextmanager
 def get_db_connection():
