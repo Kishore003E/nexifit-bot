@@ -4,7 +4,7 @@ from datetime import datetime, date
 from contextlib import contextmanager
 import random
 
-DB_NAME = os.environ.get('DB_PATH', '/tmp/nexifit_users.db')
+DB_NAME = os.environ.get('DB_PATH', 'nexifit_users.db')  # Changed default from /tmp/
 
 @contextmanager
 def get_db_connection():
@@ -21,7 +21,95 @@ def get_db_connection():
         conn.close()
 
 # =====================
-# INITIALIZATION FUNCTION (FIX - ENSURE ALL TABLES CREATED)
+# AUTHENTICATION FUNCTIONS (FIXED)
+# =====================
+
+def is_user_authorized(phone_number):
+    """
+    Check if a phone number is authorized AND not expired.
+    CRITICAL FIX: Check admin_users table FIRST before checking authorized_users.
+    """
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # 🔥 FIX: Check if user is admin FIRST
+        cursor.execute('''
+            SELECT id FROM admin_users WHERE phone_number = ?
+        ''', (phone_number,))
+        
+        if cursor.fetchone():
+            print(f"✅ {phone_number} is ADMIN - auto-authorized")
+            return True
+        
+        # Now check regular authorized_users
+        cursor.execute('''
+            SELECT authorized, expiry_date 
+            FROM authorized_users 
+            WHERE phone_number = ?
+        ''', (phone_number,))
+        
+        result = cursor.fetchone()
+        
+        if not result:
+            return False
+        
+        authorized = result['authorized']
+        expiry_date_str = result['expiry_date']
+        
+        # If manually deactivated
+        if not authorized:
+            return False
+        
+        # If expiry date is set, check if expired
+        if expiry_date_str:
+            try:
+                # Handle both formats: with and without microseconds
+                if '.' in expiry_date_str:
+                    expiry_date = datetime.strptime(expiry_date_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+                else:
+                    expiry_date = datetime.strptime(expiry_date_str, '%Y-%m-%d %H:%M:%S')
+                
+                if datetime.now() > expiry_date:
+                    return False  # Expired
+            except ValueError as e:
+                print(f"Warning: Invalid expiry_date format for {phone_number}: {expiry_date_str}")
+                pass
+        
+        return True
+
+def is_admin(phone_number):
+    """Check if a phone number is an admin."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id FROM admin_users WHERE phone_number = ?
+        ''', (phone_number,))
+        result = cursor.fetchone() is not None
+        
+        if result:
+            print(f"✅ {phone_number} verified as ADMIN")
+        else:
+            print(f"❌ {phone_number} is NOT an admin")
+        
+        return result
+
+def log_auth_attempt(phone_number, action, success=False):
+    """Log authentication attempts for security."""
+    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO auth_logs (phone_number, action, success)
+            VALUES (?, ?, ?)
+        ''', (phone_number, action, 1 if success else 0))
+
+# =====================
+# INITIALIZATION FUNCTION (FIXED)
 # =====================
 
 def ensure_all_tables_exist():
@@ -33,7 +121,17 @@ def ensure_all_tables_exist():
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. AUTHORIZED USERS TABLE
+            # 1. ADMIN USERS TABLE (Create FIRST)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admin_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone_number TEXT UNIQUE NOT NULL,
+                    name TEXT,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 2. AUTHORIZED USERS TABLE
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS authorized_users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,16 +141,6 @@ def ensure_all_tables_exist():
                     date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     expiry_date TIMESTAMP,
                     notes TEXT
-                )
-            ''')
-            
-            # 2. ADMIN USERS TABLE
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS admin_users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    phone_number TEXT UNIQUE NOT NULL,
-                    name TEXT,
-                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -144,80 +232,11 @@ def ensure_all_tables_exist():
             ''')
             
             conn.commit()
-            print("✅ All database tables verified/created!")
             return True
             
     except Exception as e:
         print(f"❌ Error creating tables: {e}")
         return False
-
-
-# =====================
-# AUTHENTICATION FUNCTIONS
-# =====================
-
-def is_user_authorized(phone_number):
-    """Check if a phone number is authorized AND not expired."""
-    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT authorized, expiry_date 
-            FROM authorized_users 
-            WHERE phone_number = ?
-        ''', (phone_number,))
-        
-        result = cursor.fetchone()
-        
-        if not result:
-            return False
-        
-        authorized = result['authorized']
-        expiry_date_str = result['expiry_date']
-        
-        # If manually deactivated
-        if not authorized:
-            return False
-        
-        # If expiry date is set, check if expired
-        if expiry_date_str:
-            try:
-                # Handle both formats: with and without microseconds
-                if '.' in expiry_date_str:
-                    expiry_date = datetime.strptime(expiry_date_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
-                else:
-                    expiry_date = datetime.strptime(expiry_date_str, '%Y-%m-%d %H:%M:%S')
-                
-                if datetime.now() > expiry_date:
-                    return False  # Expired
-            except ValueError as e:
-                print(f"Warning: Invalid expiry_date format for {phone_number}: {expiry_date_str}")
-                pass
-        
-        return True
-
-def is_admin(phone_number):
-    """Check if a phone number is an admin."""
-    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id FROM admin_users WHERE phone_number = ?
-        ''', (phone_number,))
-        return cursor.fetchone() is not None
-
-def log_auth_attempt(phone_number, action, success=False):
-    """Log authentication attempts for security."""
-    ensure_all_tables_exist()  # ENSURE TABLES EXIST FIRST
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO auth_logs (phone_number, action, success)
-            VALUES (?, ?, ?)
-        ''', (phone_number, action, 1 if success else 0))
 
 # =====================
 # ADMIN FUNCTIONS
