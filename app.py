@@ -1376,57 +1376,166 @@ def weekly_goal_check():
 threading.Thread(target=weekly_goal_check, daemon=True).start()
 
 
-# -------------------------
-# Auto-initialize database on startup
-# -------------------------
-def initialize_database():
-    """Initialize database tables if they don't exist."""
-    import sqlite3
-
-    # FORCE DELETE the database file every single start
-    db_file = 'nexifit_users.db'
-    if os.path.exists(db_file):
-        os.remove(db_file)
-        print("OLD DATABASE FILE DELETED — FORCING 100% FRESH START")
-        
-    conn = sqlite3.connect('nexifit_users.db')
-    cursor = conn.cursor()
-    
-# -------------------------
-# Auto-initialize database on startup (FIXED VERSION)
-# -------------------------
 def initialize_database():
     """Initialize database tables if they don't exist."""
     import sqlite3
     
-    # DON'T delete database in production - only for testing
-    # Comment this out after first successful run
-    db_file = 'nexifit_users.db'
+    # Get the correct database path from environment variable
+    db_file = os.environ.get('DB_PATH', 'nexifit_users.db')
+    
+    # OPTIONAL: Delete old database (ONLY for testing - remove in production)
     if os.path.exists(db_file):
         os.remove(db_file)
         print("🔄 OLD DATABASE DELETED - FRESH START")
     
-    # First, ensure all tables exist
-    from database import ensure_all_tables_exist
-    ensure_all_tables_exist()
+    print(f"\n{'='*60}")
+    print(f"📂 Database Path: {db_file}")
+    print(f"{'='*60}\n")
     
+    # Step 1: Connect to database
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     
-    # FORCE insert the correct admin every time
-    default_admin = "whatsapp:+918667643749"  # Your WhatsApp number
+    # ============================================
+    # STEP 2: CREATE ALL TABLES FIRST (CRITICAL!)
+    # ============================================
     
-    print(f"\n{'='*60}")
+    print("📋 Creating database tables...")
+    
+    # 1. ADMIN USERS TABLE (Create FIRST - most important)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT UNIQUE NOT NULL,
+            name TEXT,
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    print("  ✅ admin_users table created")
+    
+    # 2. AUTHORIZED USERS TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS authorized_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT UNIQUE NOT NULL,
+            name TEXT,
+            authorized INTEGER DEFAULT 1,
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expiry_date TIMESTAMP,
+            notes TEXT
+        )
+    ''')
+    print("  ✅ authorized_users table created")
+    
+    # 3. AUTH LOGS TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auth_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT NOT NULL,
+            action TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            success INTEGER DEFAULT 0
+        )
+    ''')
+    print("  ✅ auth_logs table created")
+    
+    # 4. WORKOUT LOGS TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS workout_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT NOT NULL,
+            workout_minutes INTEGER,
+            calories_burned INTEGER,
+            progress_percent REAL,
+            goal TEXT,
+            date_completed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_workout_logs_phone_date 
+        ON workout_logs(phone_number, date_completed)
+    ''')
+    print("  ✅ workout_logs table created")
+    
+    # 5. MENTAL HEALTH TIPS TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mental_health_tips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tip_text TEXT NOT NULL,
+            category TEXT DEFAULT 'general',
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            active INTEGER DEFAULT 1
+        )
+    ''')
+    print("  ✅ mental_health_tips table created")
+    
+    # 6. USER TIP PREFERENCES TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_tip_preferences (
+            phone_number TEXT PRIMARY KEY,
+            receive_tips INTEGER DEFAULT 1,
+            preferred_time TEXT DEFAULT '07:00',
+            last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    print("  ✅ user_tip_preferences table created")
+    
+    # 7. USER TIP HISTORY TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_tip_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT NOT NULL,
+            tip_id INTEGER NOT NULL,
+            sent_date DATE NOT NULL,
+            sent_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_user_tip_history_phone 
+        ON user_tip_history(phone_number)
+    ''')
+    
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_user_tip_history_date 
+        ON user_tip_history(sent_date)
+    ''')
+    print("  ✅ user_tip_history table created")
+    
+    # 8. WORKOUT STREAKS TABLE
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS workout_streaks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT UNIQUE NOT NULL,
+            current_streak INTEGER DEFAULT 0,
+            longest_streak INTEGER DEFAULT 0,
+            last_workout_date DATE
+        )
+    ''')
+    print("  ✅ workout_streaks table created")
+    
+    # Commit table creation
+    conn.commit()
+    print("\n✅ ALL TABLES CREATED SUCCESSFULLY!\n")
+    
+    # ============================================
+    # STEP 3: NOW INSERT ADMIN (After tables exist)
+    # ============================================
+    
+    default_admin = "whatsapp:+918667643749"
+    
+    print(f"{'='*60}")
     print(f"🔐 SETTING UP ADMIN: {default_admin}")
     print(f"{'='*60}")
     
-    # 1. INSERT INTO ADMIN_USERS TABLE (MOST IMPORTANT)
+    # Insert into admin_users table
     cursor.execute('''
         INSERT OR REPLACE INTO admin_users (phone_number, name, date_added)
         VALUES (?, ?, CURRENT_TIMESTAMP)
     ''', (default_admin, "Kishore"))
     
-    # 2. INSERT INTO AUTHORIZED_USERS TABLE (As backup)
+    # Insert into authorized_users table (as backup)
     cursor.execute('''
         INSERT OR REPLACE INTO authorized_users (phone_number, name, authorized, date_added)
         VALUES (?, ?, 1, CURRENT_TIMESTAMP)
@@ -1434,7 +1543,10 @@ def initialize_database():
     
     conn.commit()
     
-    # VERIFY ADMIN WAS INSERTED
+    # ============================================
+    # STEP 4: VERIFY ADMIN WAS INSERTED
+    # ============================================
+    
     cursor.execute('SELECT * FROM admin_users WHERE phone_number = ?', (default_admin,))
     admin_check = cursor.fetchone()
     
@@ -1446,7 +1558,7 @@ def initialize_database():
         print(f"   📱 Phone: {default_admin}")
         print(f"   👤 Name: Kishore")
         print(f"   🔐 Admin Table: ✅")
-        print(f"   ✅ Authorized Table: ✅")
+        print(f"   ✅ Auth Table: ✅")
     else:
         print(f"❌ ADMIN INSERTION FAILED!")
         print(f"   Admin Table: {'✅' if admin_check else '❌'}")
@@ -1456,14 +1568,10 @@ def initialize_database():
     
     conn.close()
     
-    # Initialize streak tracking
-    from database import initialize_streak_tracking
-    initialize_streak_tracking()
-    
-    print("✅ Database initialization complete!")
+    print("✅ Database initialization complete!\n")
 
 
-# Initialize database on startup
+# Initialize database ONCE at startup
 initialize_database()
 
 @app.route("/health")
@@ -1471,12 +1579,9 @@ def health():
     return "OK", 200
 
 if __name__ == "__main__":
-    # Initialize database at startup
-    initialize_database()
-    
     # Run Flask app on Railway's assigned port
     app.run(
-        host='0.0.0.0',  # Listen on all interfaces (required for Railway)
+        host='0.0.0.0',
         port=PORT,
-        debug=False  # Must be False in production
+        debug=False
     )
