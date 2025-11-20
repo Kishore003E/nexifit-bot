@@ -1392,66 +1392,79 @@ def initialize_database():
     conn = sqlite3.connect('nexifit_users.db')
     cursor = conn.cursor()
     
-    # Create authorized users table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS authorized_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone_number TEXT UNIQUE NOT NULL,
-            name TEXT,
-            authorized INTEGER DEFAULT 1,
-            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expiry_date TIMESTAMP,
-            notes TEXT
-        )
-    ''')
+# -------------------------
+# Auto-initialize database on startup (FIXED VERSION)
+# -------------------------
+def initialize_database():
+    """Initialize database tables if they don't exist."""
+    import sqlite3
     
-    # Create admin users table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS admin_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone_number TEXT UNIQUE NOT NULL,
-            name TEXT,
-            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    # DON'T delete database in production - only for testing
+    # Comment this out after first successful run
+    db_file = 'nexifit_users.db'
+    if os.path.exists(db_file):
+        os.remove(db_file)
+        print("🔄 OLD DATABASE DELETED - FRESH START")
     
-    # Create audit log table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS auth_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone_number TEXT NOT NULL,
-            action TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            success INTEGER DEFAULT 0
-        )
-    ''')
+    # First, ensure all tables exist
+    from database import ensure_all_tables_exist
+    ensure_all_tables_exist()
     
-    conn.commit()
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
     
     # FORCE insert the correct admin every time
-    default_admin = "whatsapp:+918667643749"
+    default_admin = "whatsapp:+918667643749"  # Your WhatsApp number
+    
+    print(f"\n{'='*60}")
+    print(f"🔐 SETTING UP ADMIN: {default_admin}")
+    print(f"{'='*60}")
+    
+    # 1. INSERT INTO ADMIN_USERS TABLE (MOST IMPORTANT)
     cursor.execute('''
-        INSERT OR REPLACE INTO admin_users (phone_number, name)
-        VALUES (?, ?)
+        INSERT OR REPLACE INTO admin_users (phone_number, name, date_added)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
     ''', (default_admin, "Kishore"))
     
+    # 2. INSERT INTO AUTHORIZED_USERS TABLE (As backup)
     cursor.execute('''
-        INSERT OR REPLACE INTO authorized_users (phone_number, name, authorized)
-        VALUES (?, ?, 1)
+        INSERT OR REPLACE INTO authorized_users (phone_number, name, authorized, date_added)
+        VALUES (?, ?, 1, CURRENT_TIMESTAMP)
     ''', (default_admin, "Kishore"))
     
     conn.commit()
+    
+    # VERIFY ADMIN WAS INSERTED
+    cursor.execute('SELECT * FROM admin_users WHERE phone_number = ?', (default_admin,))
+    admin_check = cursor.fetchone()
+    
+    cursor.execute('SELECT * FROM authorized_users WHERE phone_number = ?', (default_admin,))
+    auth_check = cursor.fetchone()
+    
+    if admin_check and auth_check:
+        print(f"✅ ADMIN SUCCESSFULLY INSERTED:")
+        print(f"   📱 Phone: {default_admin}")
+        print(f"   👤 Name: Kishore")
+        print(f"   🔐 Admin Table: ✅")
+        print(f"   ✅ Authorized Table: ✅")
+    else:
+        print(f"❌ ADMIN INSERTION FAILED!")
+        print(f"   Admin Table: {'✅' if admin_check else '❌'}")
+        print(f"   Auth Table: {'✅' if auth_check else '❌'}")
+    
+    print(f"{'='*60}\n")
+    
     conn.close()
     
-    print(f"FRESH ADMIN INSERTED: {default_admin}")
-    print("DATABASE IS NOW 100% FRESH — YOU ARE ADMIN")
-    
+    # Initialize streak tracking
     from database import initialize_streak_tracking
     initialize_streak_tracking()
+    
+    print("✅ Database initialization complete!")
+
 
 # Initialize database on startup
 initialize_database()
-
 
 @app.route("/health")
 def health():
